@@ -1,23 +1,32 @@
-# Dockerfile - Step-by-step installation
+# Dockerfile - With build tools for InsightFace
 FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install numpy first (critical for insightface)
-RUN pip install --no-cache-dir numpy==1.23.5
+# Install build tools and dependencies (REQUIRED for insightface)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    g++ \
+    gcc \
+    make \
+    cmake \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install OpenCV
-RUN pip install --no-cache-dir opencv-python-headless==4.8.1.78
+# Create non-root user
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
 
-# Install insightface and its dependencies
-RUN pip install --no-cache-dir insightface==0.7.3 onnxruntime==1.15.1
+# Copy requirements
+COPY requirements.txt .
 
-# Install remaining packages
-RUN pip install --no-cache-dir fastapi==0.104.1 uvicorn[standard]==0.24.0
-RUN pip install --no-cache-dir python-multipart python-dotenv httpx scikit-learn Pillow
+# Install Python packages (build tools already installed)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application
-COPY . .
+COPY --chown=appuser:appuser . .
 
 RUN mkdir -p models ~/.insightface
 

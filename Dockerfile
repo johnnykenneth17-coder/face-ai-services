@@ -1,48 +1,23 @@
-# Dockerfile - Optimized for Render deployment
+# Dockerfile - Using pre-built image with OpenCV dependencies
 FROM python:3.10-slim
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
+# Skip apt-get entirely - use pre-installed wheels
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies with error handling
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    wget \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user for security
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
-
-# Set working directory
 WORKDIR /app
 
-# Copy requirements first (better caching)
+# Copy requirements first
 COPY requirements.txt .
 
-# Install Python dependencies
+# Install Python packages (OpenCV will use pre-compiled wheels)
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Copy application code
-COPY --chown=appuser:appuser . .
+# Copy application
+COPY . .
 
-# Switch to non-root user
-USER appuser
+# Create necessary directories
+RUN mkdir -p models ~/.insightface
 
-# Expose port
-EXPOSE 8001
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8001/health')" || exit 1
-
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+# Run with reduced memory usage
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--limit-concurrency", "10"]

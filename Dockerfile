@@ -1,23 +1,25 @@
-# Dockerfile - Using pre-built base image
-FROM python:3.10-slim
+# Dockerfile - Using micromamba (handles compilers automatically)
+FROM mambaorg/micromamba:1.5.1
 
+USER root
 WORKDIR /app
 
-# Install only runtime dependencies (no build tools needed)
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    libgomp1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements with pre-built wheels
-COPY requirements.txt .
+# Copy environment file
+COPY environment.yml /tmp/environment.yml
 
-# Install packages (insightface will use pre-built wheel from PyPI)
-RUN pip install --no-cache-dir --only-binary=:all: -r requirements.txt || \
-    pip install --no-cache-dir -r requirements.txt
+# Create environment with insightface
+RUN micromamba install -y -n base -f /tmp/environment.yml && \
+    micromamba clean --all --yes
 
 COPY . .
+
+ENV PATH="/opt/conda/bin:${PATH}"
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]

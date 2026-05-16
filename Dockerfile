@@ -1,26 +1,26 @@
-# Dockerfile - Complete working version
+# Dockerfile - Corrected package names
 FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies (including build tools)
+# Install system dependencies with corrected package names
 RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     gcc \
     make \
     cmake \
     python3-dev \
-    libgl1-mesa-glx \
+    libgl1-mesa-dri \
     libglib2.0-0 \
     libgomp1 \
     wget \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (for better caching)
+# Copy requirements
 COPY requirements.txt .
 
-# Install Python packages with specific versions to avoid conflicts
+# Install Python packages in specific order
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir numpy==1.23.5 && \
     pip install --no-cache-dir opencv-python-headless==4.8.1.78 && \
@@ -38,5 +38,4 @@ RUN mkdir -p models && mkdir -p /root/.insightface
 # Expose port
 EXPOSE 8001
 
-# Run
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]

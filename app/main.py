@@ -1,132 +1,88 @@
-from fastapi import FastAPI, HTTPException, Depends, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationToken
-from typing import List, Optional
-import uvicorn
+"""
+app/main.py — FEECENT Face-Authentication Service
+Production FastAPI entry point
+"""
 import logging
-from datetime import datetime
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .config import Config
-from .services.face_service import FaceAuthenticationService
+from .routes import face_routes
 
-# Configure logging
+# ── Logging ─────────────────────────────────────────────────
 logging.basicConfig(
-    level=getattr(logging, Config.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=getattr(logging, Config.LOG_LEVEL, logging.INFO),
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI
-app = FastAPI(title="Face Authentication Service", version="1.0.0")
 
-# CORS configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to frontend URL
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# ── Lifespan (replaces deprecated on_event) ──────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("FEECENT Face-Auth Service starting …")
+    # Warm-up: import heavy models so first request isn't slow
+    try:
+        from .models.face_recognizer import FaceRecognizer  # noqa: F401
+        logger.info("Face models pre-loaded ✓")
+    except Exception as exc:
+        logger.warning(f"Model pre-load skipped: {exc}")
+    yield
+    logger.info("Face-Auth Service shutting down …")
+
+
+# ── App factory ──────────────────────────────────────────────
+app = FastAPI(
+    title="FEECENT Face Authentication API",
+    version="2.0.0",
+    docs_url="/docs" if Config.DEBUG else None,
+    redoc_url=None,
+    lifespan=lifespan,
 )
 
-# Security
-security = HTTPBearer()
+# ── CORS (allow your Vercel + Capacitor origins) ─────────────
+ALLOWED_ORIGINS = [
+    "https://bank-backend-blush.vercel.app",
+    "http://localhost:3000",
+    "http://localhost:8080",
+    "capacitor://localhost",
+    "ionic://localhost",
+    "http://localhost",
+]
 
-# Initialize service
-face_service = FaceAuthenticationService()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
+)
 
-# API Key verification
-async def verify_api_key(token: HTTPAuthorizationToken = Depends(security)):
-    if token.credentials != Config.API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return token.credentials
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+# ── Global exception handler ─────────────────────────────────
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled error on {request.url}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "error": "Internal server error"},
+    )
 
-@app.post("/v1/face/register")
-async def register_face(
-    request: Request,
-    api_key: str = Depends(verify_api_key)
-):
-    """
-    Register a user's face from multiple images
-    """
-    try:
-        body = await request.json()
-        images = body.get('images', [])
-        user_id = body.get('user_id')
-        
-        if not images or not user_id:
-            raise HTTPException(status_code=400, detail="Missing images or user_id")
-        
-        if len(images) < 2:
-            raise HTTPException(status_code=400, detail="Need at least 2 images")
-        
-        result = await face_service.register_face(images, user_id)
-        
-        if not result['success']:
-            raise HTTPException(status_code=400, detail=result['error'])
-        
-        return result
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Registration error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/v1/face/verify")
-async def verify_face(
-    request: Request,
-    api_key: str = Depends(verify_api_key)
-):
-    """
-    Verify a face against stored embedding
-    """
-    try:
-        body = await request.json()
-        image = body.get('image')
-        stored_embedding = body.get('stored_embedding')
-        user_id = body.get('user_id')
-        
-        if not image or not stored_embedding:
-            raise HTTPException(status_code=400, detail="Missing image or stored_embedding")
-        
-        result = await face_service.verify_face(image, stored_embedding, user_id)
-        
-        return result
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Verification error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# ── Routes ───────────────────────────────────────────────────
+app.include_router(face_routes.router, prefix="/auth/face", tags=["Face Auth"])
 
-@app.post("/v1/face/liveness")
-async def verify_liveness(
-    request: Request,
-    api_key: str = Depends(verify_api_key)
-):
-    """
-    Verify liveness using multiple frames
-    """
-    try:
-        body = await request.json()
-        frames = body.get('frames', [])
-        
-        if len(frames) < 5:
-            raise HTTPException(status_code=400, detail="Need at least 5 frames")
-        
-        result = await face_service.verify_liveness(frames)
-        
-        return result
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Liveness error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "service": "feecent-face-auth", "version": "2.0.0"}
+
+
+@app.get("/", tags=["Health"])
+async def root():
+    return {"message": "FEECENT Face Authentication Service", "status": "running"}
